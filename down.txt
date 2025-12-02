@@ -6,8 +6,15 @@ https://1.1.1.1/help
 ipconfig /flushdns
 
 
+
+cd C:\cloudflared
+notepad C:\cloudflared\config.yml
+
 proxy-dns: true
 proxy-dns-port: 5053
 proxy-dns-address: 127.0.0.1
 upstream:
   - https://cloudflare-dns.com/dns-query
+
+
+.\cloudflared.exe proxy-dns --port 5053 --address 127.0.0.1 --upstream https://1.1.1.1/dns-query --upstream https://1.0.0.1/dns-query
