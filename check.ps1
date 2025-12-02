@@ -1,3 +1,15 @@
+# Verificar si se está ejecutando como Administrador
+$esAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $esAdmin) {
+    Write-Host "⚠️  AVISO: Este script necesita permisos de Administrador para verificar el Firewall" -ForegroundColor Yellow
+    Write-Host "   Algunas verificaciones pueden fallar. Para mejores resultados:" -ForegroundColor Yellow
+    Write-Host "   1. Cierra esta ventana" -ForegroundColor Gray
+    Write-Host "   2. Haz clic derecho en el archivo .ps1" -ForegroundColor Gray
+    Write-Host "   3. Selecciona 'Ejecutar con PowerShell (como Administrador)'`n" -ForegroundColor Gray
+    Start-Sleep -Seconds 3
+}
+
 Write-Host "=== VERIFICACIÓN DE MEDIDAS DE MITIGACIÓN ===`n" -ForegroundColor Cyan
 
 # ---- 1. DNSSEC ----
@@ -17,18 +29,27 @@ elseif ($dnsServers | Where-Object { $dnssecServers -contains $_ }) {
 
 # ---- 2. DoH / DNS over HTTPS ----
 Write-Host "`n[2] DNS over HTTPS (DoH):"
-$doh = Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue
 
-if ($doh -eq $null -or $doh.Count -eq 0) {
-    Write-Host "  - DoH DESACTIVADO (no hay servidores DoH registrados)" -ForegroundColor Red
-} else {
-    # Verificar si Windows requiere DoH
-    $dohConfig = Get-DnsClientDohConfiguration | Select-Object -ExpandProperty DohUsageMode
-    if ($dohConfig -eq "Require") {
-        Write-Host "  - DoH ACTIVADO y obligatorio" -ForegroundColor Green
+# Verificar si los comandos DoH están disponibles (Windows 11 / Windows Server 2022+)
+$dohSupported = Get-Command Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue
+
+if ($dohSupported) {
+    $doh = Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue
+    
+    if ($doh -eq $null -or $doh.Count -eq 0) {
+        Write-Host "  - DoH DESACTIVADO (no hay servidores DoH registrados)" -ForegroundColor Red
     } else {
-        Write-Host "  - DoH PARCIALMENTE ACTIVADO pero no obligatorio" -ForegroundColor Yellow
+        # Verificar si Windows requiere DoH
+        $dohConfig = Get-DnsClientDohConfiguration -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DohUsageMode
+        if ($dohConfig -eq "Require") {
+            Write-Host "  - DoH ACTIVADO y obligatorio" -ForegroundColor Green
+        } else {
+            Write-Host "  - DoH PARCIALMENTE ACTIVADO pero no obligatorio" -ForegroundColor Yellow
+        }
     }
+} else {
+    Write-Host "  - DoH NO SOPORTADO en esta versión de Windows" -ForegroundColor Yellow
+    Write-Host "    (Requiere Windows 11 o Windows Server 2022+)" -ForegroundColor Gray
 }
 
 # ---- 3. DNS Fijo / DNS Estático ----
@@ -60,12 +81,22 @@ if ($arp -match "static") {
 
 # ---- 5. Reglas de Firewall contra ARP Spoofing ----
 Write-Host "`n[5] Firewall contra ARP Spoofing:"
-$arpRule = Get-NetFirewallRule | Where-Object { $_.DisplayName -like "*ARP*" }
 
-if ($arpRule) {
-    Write-Host "  - REGLA ARP ACTIVADA (Firewall bloquea ARP)" -ForegroundColor Yellow
+if ($esAdmin) {
+    try {
+        $arpRule = Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.DisplayName -like "*ARP*" }
+        
+        if ($arpRule) {
+            Write-Host "  - REGLA ARP ACTIVADA (Firewall bloquea ARP)" -ForegroundColor Yellow
+        } else {
+            Write-Host "  - REGLA ARP DESACTIVADA (no hay reglas de protección)" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  - ERROR: No se pudo verificar el Firewall" -ForegroundColor Red
+        Write-Host "    Ejecuta el script como Administrador" -ForegroundColor Gray
+    }
 } else {
-    Write-Host "  - REGLA ARP DESACTIVADA (no hay reglas de protección)" -ForegroundColor Red
+    Write-Host "  - NO VERIFICADO (se requieren permisos de Administrador)" -ForegroundColor Yellow
 }
 
 Write-Host "`n=== ANÁLISIS COMPLETO FINALIZADO ===" -ForegroundColor Cyan
