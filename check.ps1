@@ -1,140 +1,38 @@
-# Script de Verificacion de Medidas de Mitigacion
-# Autor: Script de seguridad de red
-# Descripcion: Verifica el estado de DNSSEC, DoH, DNS Fijo, ARP Estático y Firewall
+Write-Host "=== DETECCIÓN DE DNS OVER HTTPS (DoH) EN WINDOWS 10 ===`n" -ForegroundColor Cyan
 
-# Verificar si se está ejecutando como Administrador
-$esAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+# 1. Verificar si el sistema soporta DoH
+$build = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").CurrentBuildNumber
 
-if (-not $esAdmin) {
-    Write-Host "⚠️  AVISO: Ejecutando sin permisos de Administrador" -ForegroundColor Yellow
-    Write-Host "   La verificacion del Firewall puede fallar.`n" -ForegroundColor Gray
-}
+Write-Host "Build del sistema: $build"
 
-Write-Host "=== VERIFICACIoN DE MEDIDAS DE MITIGACIoN ===`n" -ForegroundColor Cyan
-
-# ---- 1. DNSSEC ----
-Write-Host "[1] DNSSEC:"
-try {
-    $dnsServers = Get-DnsClientServerAddress -ErrorAction Stop | 
-                  Where-Object { $_.ServerAddresses.Count -gt 0 } | 
-                  Select-Object -ExpandProperty ServerAddresses -First 10
-    
-    # Servidores DNS con validacion DNSSEC conocidos
-    $dnssecServers = @("1.1.1.1","1.0.0.1","8.8.8.8","8.8.4.4","9.9.9.9","149.112.112.112")
-    
-    if ($dnsServers.Count -eq 0) {
-        Write-Host "  - No hay DNS configurado, posible DHCP → DNSSEC probablemente desactivado" -ForegroundColor Yellow
-    }
-    elseif ($dnsServers | Where-Object { $dnssecServers -contains $_ }) {
-        Write-Host "  - DNSSEC POTENCIALMENTE ACTIVADO (se detectan DNS validadores)" -ForegroundColor Green
-    } else {
-        Write-Host "  - DNSSEC DESACTIVADO (no se detectan DNS con validacion)" -ForegroundColor Red
-    }
-} catch {
-    Write-Host "  - ERROR: No se pudo verificar configuracion DNS" -ForegroundColor Red
-}
-
-# ---- 2. DoH / DNS over HTTPS ----
-Write-Host "`n[2] DNS over HTTPS (DoH):"
-
-try {
-    # Verificar si el comando está disponible
-    $comandoDisponible = Get-Command Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue
-    
-    if ($comandoDisponible) {
-        $doh = Get-DnsClientDohServerAddress -ErrorAction Stop
-        
-        if ($doh -eq $null -or $doh.Count -eq 0) {
-            Write-Host "  - DoH DESACTIVADO (no hay servidores DoH registrados)" -ForegroundColor Red
-        } else {
-            # Verificar configuracion DoH
-            try {
-                $dohConfig = Get-DnsClientDohConfiguration -ErrorAction Stop
-                $modoUso = $dohConfig | Select-Object -ExpandProperty DohUsageMode -First 1
-                
-                if ($modoUso -eq "Require") {
-                    Write-Host "  - DoH ACTIVADO y obligatorio" -ForegroundColor Green
-                } else {
-                    Write-Host "  - DoH PARCIALMENTE ACTIVADO pero no obligatorio" -ForegroundColor Yellow
-                }
-            } catch {
-                Write-Host "  - DoH configurado pero no se pudo verificar el modo" -ForegroundColor Yellow
-            }
-        }
-    } else {
-        Write-Host "  - DoH NO SOPORTADO en esta version de Windows" -ForegroundColor Yellow
-        Write-Host "    (Requiere Windows 11 Build 22000+ o Windows Server 2022+)" -ForegroundColor Gray
-    }
-} catch {
-    Write-Host "  - DoH DESACTIVADO (no hay servidores DoH registrados)" -ForegroundColor Red
-}
-
-# ---- 3. DNS Fijo / DNS Estático ----
-Write-Host "`n[3] DNS Fijo (Estático):"
-try {
-    $adaptadores = Get-DnsClientServerAddress -ErrorAction Stop | 
-                   Where-Object { $_.AddressFamily -eq 2 -and $_.ServerAddresses.Count -gt 0 }
-    
-    if ($adaptadores) {
-        Write-Host "  - DNS FIJO ACTIVADO (servidores asignados manualmente)" -ForegroundColor Green
-        foreach ($adaptador in $adaptadores) {
-            $interfaz = $adaptador.InterfaceAlias
-            $servidores = $adaptador.ServerAddresses -join ", "
-            Write-Host "    · $interfaz`: $servidores" -ForegroundColor Gray
-        }
-    } else {
-        Write-Host "  - DNS FIJO DESACTIVADO (usando DHCP)" -ForegroundColor Red
-    }
-} catch {
-    Write-Host "  - ERROR: No se pudo verificar configuracion DNS" -ForegroundColor Red
-}
-
-# ---- 4. ARP Estático (ARP -s) ----
-Write-Host "`n[4] ARP Estático:"
-try {
-    $arp = arp -a 2>$null
-    
-    if ($arp -match "estático|static") {
-        Write-Host "  - ARP ESTÁTICO ACTIVADO (entradas estáticas detectadas)" -ForegroundColor Yellow
-        # Mostrar entradas estáticas
-        $arpEstatico = $arp | Select-String -Pattern "estático|static"
-        foreach ($entrada in $arpEstatico) {
-            Write-Host "    $entrada" -ForegroundColor Gray
-        }
-    } else {
-        Write-Host "  - ARP ESTÁTICO DESACTIVADO (todas las entradas son dinámicas)" -ForegroundColor Red
-    }
-} catch {
-    Write-Host "  - ERROR: No se pudo ejecutar el comando ARP" -ForegroundColor Red
-}
-
-# ---- 5. Reglas de Firewall contra ARP Spoofing ----
-Write-Host "`n[5] Firewall contra ARP Spoofing:"
-
-if ($esAdmin) {
-    try {
-        $arpRule = Get-NetFirewallRule -ErrorAction Stop | 
-                   Where-Object { $_.DisplayName -like "*ARP*" -or $_.DisplayName -like "*Spoofing*" }
-        
-        if ($arpRule) {
-            Write-Host "  - REGLA ARP ACTIVADA (Firewall tiene reglas relacionadas)" -ForegroundColor Yellow
-            foreach ($regla in $arpRule) {
-                $estado = if ($regla.Enabled) { "Activa" } else { "Inactiva" }
-                Write-Host "    · $($regla.DisplayName) - $estado" -ForegroundColor Gray
-            }
-        } else {
-            Write-Host "  - REGLA ARP DESACTIVADA (no hay reglas de proteccion especificas)" -ForegroundColor Red
-        }
-    } catch {
-        Write-Host "  - ERROR: No se pudo verificar las reglas del Firewall" -ForegroundColor Red
-    }
+if ([int]$build -ge 19041) {
+    Write-Host "✔ El sistema SOPORTA DNS over HTTPS (DoH)" -ForegroundColor Green
 } else {
-    Write-Host "  - NO VERIFICADO (se requieren permisos de Administrador)" -ForegroundColor Yellow
-    Write-Host "    Ejecuta el script como Administrador para verificar" -ForegroundColor Gray
+    Write-Host "❌ Este sistema NO soporta DoH (requiere Windows 10 2004+)" -ForegroundColor Red
+    exit
 }
 
-Write-Host "`n=== ANÁLISIS COMPLETO FINALIZADO ===" -ForegroundColor Cyan
+# 2. Verificar si DoH está habilitado en el Registro
+$dohKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\Doh"
+$dohMode = (Get-ItemProperty $dohKey -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DohDnsMode -ErrorAction SilentlyContinue)
 
-# Pausar para ver los resultados
-Write-Host "`nPresiona cualquier tecla para salir..." -ForegroundColor Gray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+if ($dohMode -eq 2) {
+    Write-Host "✔ DoH está ACTIVADO y OBLIGATORIO (DohDnsMode = 2)" -ForegroundColor Green
+} elseif ($dohMode -eq 1) {
+    Write-Host "✔ DoH está ACTIVADO (Modo Automático)" -ForegroundColor Yellow
+} else {
+    Write-Host "❌ DoH está DESACTIVADO (DohDnsMode = 0)" -ForegroundColor Red
+}
+
+# 3. Verificar si el DNS configurado es compatible con DoH
+$dns = Get-DnsClientServerAddress | Select-Object -ExpandProperty ServerAddresses -ErrorAction SilentlyContinue
+
+$dohServers = @("1.1.1.1","1.0.0.1","8.8.8.8","8.8.4.4","9.9.9.9")
+
+if ($dns | Where-Object { $dohServers -contains $_ }) {
+    Write-Host "✔ DNS compatible con DoH detectado: $($dns -join ', ')" -ForegroundColor Green
+} else {
+    Write-Host "❌ El DNS configurado NO soporta DoH" -ForegroundColor Red
+}
+
+Write-Host "`n=== FIN DEL ANÁLISIS ==="
