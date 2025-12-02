@@ -1,16 +1,16 @@
-# Script de Verificación de Medidas de Mitigación
+# Script de Verificacion de Medidas de Mitigacion
 # Autor: Script de seguridad de red
-# Descripción: Verifica el estado de DNSSEC, DoH, DNS Fijo, ARP Estático y Firewall
+# Descripcion: Verifica el estado de DNSSEC, DoH, DNS Fijo, ARP Estático y Firewall
 
 # Verificar si se está ejecutando como Administrador
 $esAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $esAdmin) {
     Write-Host "⚠️  AVISO: Ejecutando sin permisos de Administrador" -ForegroundColor Yellow
-    Write-Host "   La verificación del Firewall puede fallar.`n" -ForegroundColor Gray
+    Write-Host "   La verificacion del Firewall puede fallar.`n" -ForegroundColor Gray
 }
 
-Write-Host "=== VERIFICACIÓN DE MEDIDAS DE MITIGACIÓN ===`n" -ForegroundColor Cyan
+Write-Host "=== VERIFICACIoN DE MEDIDAS DE MITIGACIoN ===`n" -ForegroundColor Cyan
 
 # ---- 1. DNSSEC ----
 Write-Host "[1] DNSSEC:"
@@ -19,7 +19,7 @@ try {
                   Where-Object { $_.ServerAddresses.Count -gt 0 } | 
                   Select-Object -ExpandProperty ServerAddresses -First 10
     
-    # Servidores DNS con validación DNSSEC conocidos
+    # Servidores DNS con validacion DNSSEC conocidos
     $dnssecServers = @("1.1.1.1","1.0.0.1","8.8.8.8","8.8.4.4","9.9.9.9","149.112.112.112")
     
     if ($dnsServers.Count -eq 0) {
@@ -28,10 +28,10 @@ try {
     elseif ($dnsServers | Where-Object { $dnssecServers -contains $_ }) {
         Write-Host "  - DNSSEC POTENCIALMENTE ACTIVADO (se detectan DNS validadores)" -ForegroundColor Green
     } else {
-        Write-Host "  - DNSSEC DESACTIVADO (no se detectan DNS con validación)" -ForegroundColor Red
+        Write-Host "  - DNSSEC DESACTIVADO (no se detectan DNS con validacion)" -ForegroundColor Red
     }
 } catch {
-    Write-Host "  - ERROR: No se pudo verificar configuración DNS" -ForegroundColor Red
+    Write-Host "  - ERROR: No se pudo verificar configuracion DNS" -ForegroundColor Red
 }
 
 # ---- 2. DoH / DNS over HTTPS ----
@@ -47,7 +47,7 @@ try {
         if ($doh -eq $null -or $doh.Count -eq 0) {
             Write-Host "  - DoH DESACTIVADO (no hay servidores DoH registrados)" -ForegroundColor Red
         } else {
-            # Verificar configuración DoH
+            # Verificar configuracion DoH
             try {
                 $dohConfig = Get-DnsClientDohConfiguration -ErrorAction Stop
                 $modoUso = $dohConfig | Select-Object -ExpandProperty DohUsageMode -First 1
@@ -62,7 +62,7 @@ try {
             }
         }
     } else {
-        Write-Host "  - DoH NO SOPORTADO en esta versión de Windows" -ForegroundColor Yellow
+        Write-Host "  - DoH NO SOPORTADO en esta version de Windows" -ForegroundColor Yellow
         Write-Host "    (Requiere Windows 11 Build 22000+ o Windows Server 2022+)" -ForegroundColor Gray
     }
 } catch {
@@ -86,7 +86,7 @@ try {
         Write-Host "  - DNS FIJO DESACTIVADO (usando DHCP)" -ForegroundColor Red
     }
 } catch {
-    Write-Host "  - ERROR: No se pudo verificar configuración DNS" -ForegroundColor Red
+    Write-Host "  - ERROR: No se pudo verificar configuracion DNS" -ForegroundColor Red
 }
 
 # ---- 4. ARP Estático (ARP -s) ----
@@ -123,7 +123,7 @@ if ($esAdmin) {
                 Write-Host "    · $($regla.DisplayName) - $estado" -ForegroundColor Gray
             }
         } else {
-            Write-Host "  - REGLA ARP DESACTIVADA (no hay reglas de protección específicas)" -ForegroundColor Red
+            Write-Host "  - REGLA ARP DESACTIVADA (no hay reglas de proteccion especificas)" -ForegroundColor Red
         }
     } catch {
         Write-Host "  - ERROR: No se pudo verificar las reglas del Firewall" -ForegroundColor Red
