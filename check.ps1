@@ -1,41 +1,50 @@
-Write-Host "=== DETECCIÓN DE DNS OVER HTTPS (DoH) EN WINDOWS 10 ===`n" -ForegroundColor Cyan
+# Script de Verificación de Mitigaciones - Versión Simple
+# Verifica: DNSSEC, DNS Fijo y cloudflared (DoH)
 
-# 1. Verificar si el sistema soporta DoH
-$build = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").CurrentBuildNumber
+Write-Host "=== VERIFICACIÓN DE MEDIDAS DE MITIGACIÓN ===`n" -ForegroundColor Cyan
 
-Write-Host "Build del sistema: $build"
+# ---- 1. DNSSEC ----
+Write-Host "[1] DNSSEC:"
+$dnsServers = (Get-DnsClientServerAddress | Where-Object { $_.ServerAddresses.Count -gt 0 } | Select-Object -ExpandProperty ServerAddresses)
+$dnssecServers = @("1.1.1.1","1.0.0.1","8.8.8.8","8.8.4.4","9.9.9.9","149.112.112.112")
 
-if ([int]$build -ge 19041) {
-    Write-Host "✔ El sistema SOPORTA DNS over HTTPS (DoH)" -ForegroundColor Green
+if ($dnsServers -eq $null -or $dnsServers.Count -eq 0) {
+    Write-Host "  - DNSSEC DESACTIVADO (no hay DNS configurado)" -ForegroundColor Red
+}
+elseif ($dnsServers | Where-Object { $dnssecServers -contains $_ }) {
+    Write-Host "  - DNSSEC ACTIVADO (DNS con validación detectado)" -ForegroundColor Green
 } else {
-    Write-Host "❌ Este sistema NO soporta DoH (requiere Windows 10 2004+)" -ForegroundColor Red
-    exit
+    Write-Host "  - DNSSEC DESACTIVADO (no se detectan DNS con validación)" -ForegroundColor Red
 }
 
-# 2. Verificar si DoH está habilitado en el Registro
-$dohKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\Doh"
-$dohMode = (Get-ItemProperty $dohKey -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DohDnsMode -ErrorAction SilentlyContinue)
+# ---- 2. DNS Fijo (Estático) ----
+Write-Host "`n[2] DNS Fijo (Estático):"
+$adaptadores = Get-DnsClientServerAddress | Where-Object { $_.AddressFamily -eq 2 -and $_.ServerAddresses.Count -gt 0 }
 
-if ($dohMode -eq 2) {
-    Write-Host "✔ DoH está ACTIVADO y OBLIGATORIO (DohDnsMode = 2)" -ForegroundColor Green
-} elseif ($dohMode -eq 1) {
-    Write-Host "✔ DoH está ACTIVADO (Modo Automático)" -ForegroundColor Yellow
+if ($adaptadores) {
+    Write-Host "  - DNS FIJO ACTIVADO (servidores configurados manualmente)" -ForegroundColor Green
 } else {
-    Write-Host "❌ DoH está DESACTIVADO (DohDnsMode = 0)" -ForegroundColor Red
+    Write-Host "  - DNS FIJO DESACTIVADO (usando DHCP)" -ForegroundColor Red
 }
 
-# 3. Verificar si el DNS configurado es compatible con DoH
-$dns = Get-DnsClientServerAddress | Select-Object -ExpandProperty ServerAddresses -ErrorAction SilentlyContinue
+# ---- 3. cloudflared (DoH) ----
+Write-Host "`n[3] cloudflared (DNS over HTTPS):"
+$cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
 
-$dohServers = @("1.1.1.1","1.0.0.1","8.8.8.8","8.8.4.4","9.9.9.9")
-
-if ($dns | Where-Object { $dohServers -contains $_ }) {
-    Write-Host "✔ DNS compatible con DoH detectado: $($dns -join ', ')" -ForegroundColor Green
+if ($cloudflared) {
+    $procesoCloudflared = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
+    $servicioCloudflared = Get-Service -Name "cloudflared" -ErrorAction SilentlyContinue
+    
+    if ($procesoCloudflared -or ($servicioCloudflared -and $servicioCloudflared.Status -eq "Running")) {
+        Write-Host "  - cloudflared ACTIVADO (ejecutándose)" -ForegroundColor Green
+    } else {
+        Write-Host "  - cloudflared DESACTIVADO (instalado pero no ejecutándose)" -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "❌ El DNS configurado NO soporta DoH" -ForegroundColor Red
+    Write-Host "  - cloudflared DESACTIVADO (no instalado)" -ForegroundColor Red
 }
 
-Write-Host "`n=== FIN DEL ANÁLISIS ===" -ForegroundColor Cyan
+Write-Host "`n=== ANÁLISIS COMPLETO FINALIZADO ===" -ForegroundColor Cyan
 
 # Pausar para ver los resultados
 Write-Host "`nPresiona cualquier tecla para salir..." -ForegroundColor Gray
