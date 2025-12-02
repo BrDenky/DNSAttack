@@ -2,3 +2,12 @@ https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-w
 
 Verificar que DoH realmente funcionas
 https://1.1.1.1/help
+
+ipconfig /flushdns
+
+
+proxy-dns: true
+proxy-dns-port: 5053
+proxy-dns-address: 127.0.0.1
+upstream:
+  - https://cloudflare-dns.com/dns-query
