@@ -35,4 +35,8 @@ if ($dns | Where-Object { $dohServers -contains $_ }) {
     Write-Host "❌ El DNS configurado NO soporta DoH" -ForegroundColor Red
 }
 
-Write-Host "`n=== FIN DEL ANÁLISIS ==="
+Write-Host "`n=== FIN DEL ANÁLISIS ===" -ForegroundColor Cyan
+
+# Pausar para ver los resultados
+Write-Host "`nPresiona cualquier tecla para salir..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
