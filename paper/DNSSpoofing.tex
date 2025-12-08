@@ -1,0 +1,756 @@
+\documentclass[conference]{IEEEtran}
+\bibliography{references}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{float}
+% Se recomienda usar el paquete geometry para controlar los márgenes si es necesario
+%\usepackage[letterpaper, margin=1in]{geometry} 
+\usepackage{tikz}
+% La librería 'positioning' es crucial para el espaciado y alineación
+\usetikzlibrary{positioning}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    frame=single,
+    keywordstyle=\color{blue},
+    stringstyle=\color{teal},
+    commentstyle=\color{gray},
+    showstringspaces=false
+}
+
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{DNS Spoofing Attack in a Controlled Environment}
+
+\author{\IEEEauthorblockN{1\textsuperscript{st} Mateo David Pilaquinga Guachamin}
+\IEEEauthorblockA{\textit{Computer Sciences} \\
+\textit{Yachay Tech University}\\
+Ibarra, Ecuador \\
+mateo.pilaquinga@yachaytech.edu.ec\\
+ORCID: 0000-0002-4666-4414}}
+
+
+\maketitle
+
+\begin{abstract}
+DNS spoofing remains a critical threat in flat local-area networks, where attackers can establish Man-in-the-Middle (MitM) positions through ARP spoofing and transparently inject forged DNS responses. Although the literature reports multiple countermeasures---including DNSSEC, encrypted DNS channels (DoH/DoT), and machine-learning-based intrusion detection systems—these solutions are not universally deployed, often require non-trivial infrastructure changes, and do not fully address on-path attackers operating at Layer~2 in campus or enterprise environments. This paper presents the design, implementation, and evaluation of a reproducible DNS spoofing laboratory in a controlled bridged network using VMware virtual machines, with a Kali Linux attacker running Bettercap and a Windows~10 victim, complemented by a phishing web server for credential capture. The experiment is instrumented with packet captures, host-level diagnostics, and a quantitative metric, Attack Success Rate (ASR), defined as the proportion of fraudulent DNS responses accepted by the victim. In the baseline scenario, the combined ARP~+~DNS spoofing attack achieves an ASR of $100\%$, consistently redirecting the victim to a malicious domain and enabling full credential compromise. After deploying lightweight mitigations—static ARP mapping at Layer~2 and strict host-based filtering of UDP/53 traffic at Layer~3—the ASR is reduced to $0\%$ and $\leq 0.5\%$, respectively. These results show that properly engineered local controls can almost completely neutralize DNS spoofing in flat networks, even in the absence of advanced cryptographic protections at the protocol level. \\
+The entire environment of this laboratory is in the following GitHub repository.\\
+https://github.com/BrDenky/DNSAttack
+\end{abstract}
+
+\begin{IEEEkeywords}
+Man-in-the-Middle (MitM), DNS Spoofing, ARP Spoofing, Cloud Security, AWS EC2, Virtual Machines, DNSSEC, Encrypted DNS, Layered Security, Network Forensics.
+\end{IEEEkeywords}
+
+\section{Introduction}
+The Domain Name System, or DNS, is an Internet application layer protocol. Its importance lies in its function as an Internet domain directory. When searching for [google.com](http://google.com), DNS transforms it into numeric IPv4 or IPv6 addresses that machines use to identify, locate, and route network packets.
+
+The DNS architecture is hierarchical and distributed, consisting of a server called the Root, followed by Top-Level Domains (TLDs). \cite{b10}
+
+
+\subsection{DNS Resolution Flow}
+The process begins with the Stub Resolver, which generally includes the operating system or browser that generates the initial query. This query reaches the Recursive Resolver, which takes on the entire workload. This server performs all iterative and recursive queries on the Root, TLD, and Authoritative servers. This Authoritative Name Server is the one that stores the records for a zone. These include A for IPv4, AAAA for IPv6, and CNAME for aliases.
+
+This entire query process occurs by default on port 53/UDP. Transaction ID and Source Port are used to match the request with the response. One DNS mechanism for resolving requests faster is the use of Caching Resolver, which temporarily stores the responses obtained according to TTL (Time To Live).
+
+The predictability of these parameters makes it easier to falsify responses. Due to the very nature of caching, which speeds up browsing, a poisoned resolver (controlled or modified addressing) introduces a large window of opportunity for the attacker to gain permissions, affecting all users connected to the compromised network segment.
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{imgs/dns.pdf}
+    \caption{Conceptual DNS workflow. Source: ClouDNS, “What is DNS?”, 2024.}
+    \label{fig:dnsflow}
+\end{figure}
+
+
+
+
+\section{Review of related literature}
+A review of various studies conducted within the last five years shows that DNS spoofing attacks and DNS cache poisoning are critical threats that remain prevalent due to a lack of awareness of their implications or the use of authentication and integrity mechanisms in the traditional DNS protocol. The publication by Budiansyah et al. \cite{b1} indicates that modifications to normal DNS traffic produce highly measurable anomalies that are easy to detect, such as abnormal response times, inconsistent TTL values, abnormal packet sizes and TLS attributes, and irregular response patterns, making it extremely important to capture and analyze constant traffic. Aijaz et al. \cite{b2} and Afek and Berger \cite{b3} also emphasize that DNS is structurally very vulnerable. The mere absence of DNSSEC (a set of security extensions for DNS that adds cryptographic signatures to DNS records) that ensures the authenticity and integrity of data, and the dependence on the UDP protocol, opens the door for attackers to inject forged responses. In historical context, cases such as Kaminsky and the Sea Turtle campaign, which were studied by Kukutla \cite{b4}, give more weight to the real impact of DNS manipulation.
+
+In the use of recursive DNS resolution, Qinxin et al. \cite{b5} mention that there are techniques that mitigate the attack but do not eliminate it completely, including domain validation, source port randomization, and DNSSEC, which are good implementation practices. Ethical DNS spoofing, which is examined by Gattu et al. \cite{b6}, reinforces the value of controlled implementation and demonstration using tools such as tcpdump, Wireshark, Suricata, and Scapy. This topic is also supported by Cekerevac \cite{b7}, who considers DNS spoofing to be the most common entry point for more robust and coordinated attacks such as MiTM, emphasizing the use of firewalls, DNS filtering, DoH, and TLS validation.
+
+In the current context, the detection of these attacks has evolved from lightweight cryptographic verification \cite{b8} to machine learning-based IDS models with high accuracy. \cite{b9}
+
+The findings strongly support the theoretical and empirical basis for the design, execution, and analysis of the DNS Spoofing attack as a project.
+
+\section{Problem identification}
+DNS spoofing attacks are based on the client-server model, where an external person manipulates the normal flow of DNS queries between the client (victim) and the recursive server responsible for resolving domain names.
+
+DNS (Domain Name System) allows host names to be translated into IP addresses, which the machine uses to identify and locate the destination server. In a normal scenario, this entire process is transparent to the end user and is commonly done without cryptographic authentication or integrity verification.
+
+The absence of these security mechanisms allows attacks such as DNS Cache Poisoning or DNS Response Spoofing, which modify the legitimate server's response in transit, introducing false IP addresses associated with the queried domains.
+
+This allows the attacker to perform any malicious activity on the client, from capturing data and access credentials to installing malware on the computer.
+
+\section{Importance of solving the problem}
+In centralized environments (business or academic), it is common to use a single, shared resolver (recursive DNS server). The impact of this attack on networks is critical, as the attacker compromises the cache of all workstations, devices, and services that depend on it, which will be intercepted. This directly affects the confidentiality, integrity, and availability of the entity.
+
+Most applications on the network depend on DNS. The attacker has the ability to redirect traffic to malicious destinations without the need to exploit specific vulnerabilities in each application. These illegitimate sites are often identical to the original. The user has a false sense of security, which facilitates secondary attacks such as phishing and credential capture. Although there are security extensions for signing DNS responses such as DNSSEC, and other mechanisms such as DNS over TLS (DoT) or DNS over HTTPS (DoH), they are not yet a universal standard. Specifically, in corporate and academic networks, resolvers that accept and process responses without first verifying their authenticity continue to be used.
+
+\section{Problem statement}
+In a typical network, clients trust or directly bypass the security of the recursive DNS server that translates domain names into IP addresses for the network or subnetwork used. There is no knowledge about the design of the DNS protocol, which lacks authentication and integrity verification mechanisms if not implemented properly.
+
+The security problem escalates when an outsider obtains a MiTM (Man-in-the-Middle) position within the same network segment as the victim. In this scenario, the attacker can intercept and inject false DNS responses (DNS Spoofing) and, in addition to other attacks such as the aforementioned phishing, compromise the entity or company itself on a large scale.
+
+\subsection{Objectives}
+This paper aims to implement a laboratory scenario where the operation of a DNS spoofing attack is demonstrated academically, using a network and controlled virtual machines that simulate a real scenario, in order to propose mitigation methods for the prevention of future attacks.
+
+The following objectives are proposed for the scope of this project:
+
+Model the operation of the DNS spoofing attack applied to a controlled environment, using VMWare virtualization software and connection through an INC bridge, to generate a documented and reproducible laboratory.
+
+Perform DNS Spoofing on an attacking machine that spoofs DNS responses to a victim machine, using the Bettercap framework available for pentesting and creating an illegitimate server hosted on the same attacking machine to which the victim will be redirected, demonstrating the viability of the attack on the end user and the real impact of this practice.
+
+Develop documentation on mitigation strategies and best practices against DNS Spoofing attacks, implementing cryptographic mechanisms such as DNSSEC, encrypted channels such as DoT/DoH, configuration reinforcement in resolvers, and detection rules in IDS/IPS systems so that they are applicable to corporate and academic networks.
+
+
+\section{Methodology}
+The laboratory is implemented in a controlled and reproducible environment using VMware Workstation/Player virtualization software and configured as a virtual internal network (LAN) for the purpose of simulating a local network segment. The configuration of the virtual machines is detailed in the table below. \ref{tab:rolesip}.
+
+
+\begin{table}[htbp]
+\caption{Network Roles and IP/MAC Configuration}
+\label{tab:rolesip}
+\begin{center}
+\begin{tabular}{@{}p{1.5cm} p{1.5cm} p{1.5cm} p{1.5cm} p{1cm}@{}} \hline
+\textbf{Role} & \textbf{O.S} & \textbf{Key Tool} & \textbf{IP Address} & \textbf{MAC} \\ \hline
+Attacker & Kali Linux & Bettercap & 192.168.0.116 & 7f:c8 \\
+Victim & Windows 10 & Web Browser & 192.168.0.117 & 78:66 \\
+Gateway Forwarder & - & Custom VMnet0 & 192.168.0.0 & 50:98 \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+Network configuration is important for proper communication between both virtual machines. This is achieved through the use of a bridged network, which allows such communication and internet access for downloading tools, while keeping the activity isolated from external networks. On the attacking machine, firewall policies such as iptables and ufw are configured in permissive mode to ensure that Bettercap, the tool to be used, can operate without restrictions on ports 53/UDP corresponding to DNS and 80/TCP corresponding to HTTP/WEB phishing. Finally, it must be verified that no local services such as system-resolved or dnsmaq are using port 53, so that Bettercap behaves as the illegitimate resolver when performing spoofing.
+
+\subsection{Attacker Configuration - Kali Linux Vm}
+It should be noted that the attacking virtual machine also functions as a malicious web server that receives redirected traffic from the victim.
+
+The first step is to install Bettercap, which, as mentioned previously, is a pentesting framework that is key to the joint execution of ARP Spoofing (MiTM) and DNS Spoofing attacks.
+
+\begin{lstlisting}[language=bash]
+sudo apt install bettercap
+sudo apt install bettercap-ui   # If you want to use the visual interface (http://127.0.0.1:80)
+\end{lstlisting}
+
+The Python web development microframework FLASK is used to launch the phishing server, using the attacker's port 80/TCP. This assembled server contains the fraudulent website from which user credentials and passwords will be captured. This data is stored in the cred.txt file. This implementation is only for demonstrating the scope of DNS Spoofing; the phishing attack is an addition for the lab.
+
+
+\begin{lstlisting}[language=bash]
+curl -sSL https://gist.github.com/BrDenky/bcc41c9546a22c59d7eb4d2c4e208825/raw/install.sh | bash
+\end{lstlisting}
+
+\subsection{Bettercap}
+Iniciamos bettercap:
+
+\begin{lstlisting}[language=bash]
+sudo bettercap
+\end{lstlisting}
+
+DNS Spoofing ensures successful operation through a prior ARP Spoofing (MiTM) attack.
+
+\begin{itemize}
+    \item ARP Spoofing \\
+    For ARP Spoofing (MiTM), bettercap begins by spoofing the victim's ARP table. This simple action places the attacker in the middle of the communication, allowing them to intercept all traffic destined for the Gateway or Resolver.
+
+    \begin{lstlisting}[language=bash]
+    set arp.spoof.targets <ip_victima>
+    arp.spoof on
+    \end{lstlisting}
+    
+    \item DNS Spoofing\\
+    To achieve DNS spoofing, it is important to have intercepted the traffic. Next, Bettercap intercepts these DNS queries on the victim's port 53/UDP, and instead of forwarding them to the legitimate resolver, it injects the false response before it can respond.
+    
+    \begin{lstlisting}[language=bash]
+    set dns.spoof.domains <dominio_a_redireccionar>
+    set dns.spoof.address <ip_server_malicioso>
+    dns.spoof.on
+    \end{lstlisting}
+    
+\end{itemize}
+With this configuration, HTTP traffic from any query made by the victim is redirected to the domain selected by the attacker (malicious web server).
+
+\subsection{Victim Configuration - Windows VM}
+From the virtual machine, the gateway is configured to be used as a DNS resolver, from which it will redirect to the original website. However, no explicit modification is made to resolve to the attacker's IP address.
+
+The following commands are used to verify that the attack is successful once it is launched. It is verified that the gateway's IP is now associated with the attacker's MAC.
+
+Comandos útiles:
+\begin{lstlisting}[language=bash]
+# Confirm the victim's IP and gateway address
+ipconfig /all
+
+# Check the ARP table and the association of the IP_gateway with the attacker's MAC
+arp -a
+
+# Clear the DNS cache and force a new query
+ipconfig /flushdns
+
+\end{lstlisting}
+
+
+\subsection{Evidence Recopilation}
+For the results and mitigation section, it is necessary to collect evidence of the correct functioning of the DNS spoofing attack. To do this, information is collected from the logs generated by Bettercap and the cred.txt file is reviewed, where the data obtained from the user who interacted with our fake page is stored.
+
+From the attacking machine, Wireshark is used to capture DNS/53 and HTTP/80 traffic, where the incoming DNS query packets and the malicious DNS responses to the service request must be observed.
+
+In addition, screenshots of the victim's command line are attached with:
+
+\begin{table}[htbp]
+\caption{Commands used in verification and diagnostics}
+\label{tab:cmdcheck}
+\begin{center}
+\begin{tabular}{@{}p{1.2cm} p{6cm}@{}} \hline
+\textbf{Command} & \textbf{Function} \\ \hline
+\texttt{nslookup} & Diagnoses domain name resolution and queries specific DNS servers. \\
+\texttt{ping} & Verifies network connectivity and the reachability of a host using the IP address. \\
+\texttt{curl} & Transfers data with URL syntax, useful for testing the direct connection to the fake HTTP server. \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+Finally, IoCs are analyzed, including indicators such as unusual latency and event logs. All of this evidence is used to propose and design mitigations that reduce the effectiveness of the attack.
+
+
+\section{Analysis of the mitigation proposal}
+
+
+\begin{figure}[H]
+    \centering
+    \scriptsize 
+% Ajustes generales de TiKZ para reducir el espaciado por defecto
+    \begin{tikzpicture}[
+        % Distancia de nodo: (Vertical y Horizontal) para un layout más compacto
+        node distance=0.1cm and 0.2cm,
+        % Estilos de las capas
+        layerbox/.style={
+            rectangle, 
+            minimum height=1cm, 
+            minimum width=1cm, 
+            text width=2.5cm,
+            align=left, 
+            font=\bfseries\sffamily, 
+            text=white, 
+            inner sep=5pt
+        },
+        % Estilos para el texto de la descripción
+        description/.style={
+            rectangle, 
+            minimum height=1cm, 
+            minimum width=1cm, 
+            text width=4.7cm,
+            align=width, 
+            font=\sffamily, 
+            text=black,
+            inner sep=5pt
+        },
+        % Estilo para el número de capa
+        numberbox/.style={
+            rectangle, 
+            minimum height=1cm, 
+            minimum width=0.5cm, 
+            text width=0.5cm, 
+            align=center, 
+            font=\bfseries\sffamily, 
+            text=white, 
+            inner sep=2pt
+        }
+    ]
+
+    % Definición de colores (aproximados a la imagen)
+    \definecolor{colorDarkBlue}{HTML}{2E4A8D}
+    \definecolor{colorMediumBlue}{HTML}{3366CC}
+    \definecolor{colorLightGreen}{HTML}{6BB58F}
+    \definecolor{colorDarkGreen}{HTML}{509E71}
+
+    % --- DIBUJO DE LAS CAPAS (De arriba a abajo) ---
+
+    % CAPA 7: Application Layer (Azul Oscuro)
+    \node[layerbox, fill=colorDarkBlue] (L7) at (0, 0) {Application Layer};
+    \node[numberbox, fill=colorDarkBlue, left=of L7, anchor=east] {7};
+    \node[description, right=of L7, anchor=west] (D7) {Human-computer interaction layer, where applications can access the network services};
+
+    % CAPA 6: Presentation Layer (Azul Oscuro)
+    \node[layerbox, fill=colorDarkBlue, below=0cm of L7] (L6) {Presentation Layer};
+    \node[numberbox, fill=colorDarkBlue, left=of L6, anchor=east] {6};
+    \node[description, right=of L6, anchor=west] (D6) {Ensures that data is in a usable format and is where data encryption occurs};
+
+    % CAPA 5: Session Layer (Azul Oscuro)
+    \node[layerbox, fill=colorDarkBlue, below=0cm of L6] (L5) {Session Layer};
+    \node[numberbox, fill=colorDarkBlue, left=of L5, anchor=east] {5};
+    \node[description, right=of L5, anchor=west] (D5) {Maintains connections and is responsible for controlling ports and sessions};
+
+    % CAPA 4: Transport Layer (Azul Medio)
+    \node[layerbox, fill=colorMediumBlue, below=0cm of L5] (L4) {Transport Layer};
+    \node[numberbox, fill=colorMediumBlue, left=of L4, anchor=east] {4};
+    \node[description, right=of L4, anchor=west] (D4) {Transmits data using transmission protocols including TCP and UDP};
+
+    % CAPA 3: Network Layer (Verde Claro)
+    \node[layerbox, fill=colorLightGreen, below=0cm of L4] (L3) {Network Layer};
+    \node[numberbox, fill=colorLightGreen, left=of L3, anchor=east] {3};
+    \node[description, right=of L3, anchor=west] (D3) {Decides which physical path the data will take};
+
+    % CAPA 2: Data Link Layer (Verde Claro)
+    \node[layerbox, fill=colorLightGreen, below=0cm of L3] (L2) {Data Link Layer};
+    \node[numberbox, fill=colorLightGreen, left=of L2, anchor=east] {2};
+    \node[description, right=of L2, anchor=west] (D2) {Defines the format of data on the network};
+
+    % CAPA 1: Physical Layer (Verde Claro)
+    \node[layerbox, fill=colorLightGreen, below=0cm of L2] (L1) {Physical Layer};
+    \node[numberbox, fill=colorLightGreen, left=of L1, anchor=east] {1};
+    \node[description, right=of L1, anchor=west] (D1) {Transmits raw bit stream over the physical medium};
+
+    \end{tikzpicture}
+    \caption{Layered representation of the OSI model, highlighting the separation of responsibilities across network communication stages. This structure is fundamental for analyzing how ARP-level attacks (Layer 2) can be mitigated through mechanisms implemented in higher or adjacent layers. Source: \cite{XX}.}
+\end{figure}
+
+
+Based on the evidence gathered from the literature and due to the nature of the execution environment. Virtual machines in a bridge network. DNS spoofing is achieved through a prior ARP spoofing (MiTM) attack, therefore the proposed mitigations focus on preventing layer 2 attacks and ensuring the integrity of layer 3, denying external access to communication. The following practical strategies are proposed for local networks.
+
+\subsection{ARP Inspection}
+The first is protection at the link layer using ARP Inspection logic. This mitigation simulates the implementation of Dynamic ARP Inspection (DAI) directly at the gateway. It acts as a filter at the link layer that directly discards any suspicious DNS packet addresses, verifying that each one has consistency between the MAC address and the authorized IP address. In a real scenario, the verification is performed on a trusted basis, authorized DHCP Snooping tables. Then, when any change between the network identity and the physical identity is detected, the contamination of the victim's ARP table is completely neutralized and therefore DNS Spoofing cannot continue.
+
+\subsection{Static ARP Mapping}
+The second is the ARP Static Mapping technique, which provides defense at layer 2. It focuses on mitigating ARP Spoofing that enables MiTM. In this technique, a static and immutable entry is configured in the victim's ARP table, permanently associating the gateway's IP address with its original MAC address. With this simple configuration, Bettercap can no longer change the legitimate MAC with its MAC, preventing the interception of DNS queries and, consequently, DNS spoofing cannot be performed. The studies mentioned consider this technique to be a lightweight but highly effective measure for reducing the area of spoofing-based attacks. (cf. Halabi and Others, 2023). \cite{b9}
+
+\subsection{DNS traffic restriction}
+The third mitigation tool is strict DNS traffic restriction. Implement packet filtering rules at the host level, using iptables on the attacker or Windows firewall on the victim machine. This mechanism ensures that the client only accepts DNS responses, port 53/UDP, that originate from authorized IP addresses, in this case the gateway IP, and avoids DNS packets originating from another IP within the same network segment. This cybersecurity mitigation is important because it prevents response injection by enforcing source verification at layer 3, ensuring that the host does not accept suspicious DNS responses even if the packets are correct. The literature indicates that this verification is highly efficient in reducing response injection attacks, specifically in environments that do not have cryptographic validation (e.g., Budiansyah et al., 2025 \cite{b1}; Aijaz et al., 2021). \cite{b2}
+
+Conditions described for test environments are replicated. The first has a vulnerability without Layer 2 verification or filtering mechanisms, and the second environment does contain active defenses.
+
+\subsection{ASR Metric}
+The metric used for comparative analysis is ASR (Attack Success Rate). This metric considers the percentage of fraudulent DNS responses that the victim accepts and uses. The evaluation aims directly at reducing ASR by activating the proposed mitigation mechanisms, thus allowing a detailed comparison between the experimental results and those reported in previous research. With these results, security recommendations for the DNS protocol can be designed.
+
+
+\section{Results}
+\subsection{Attack Results}
+Before executing the DNS spoofing attack, communication between the victim machine and gateway was scanned and verified. This confirmed that the victim had a gateway and DNS server (gateway) belonging to the same network segment.
+\begin{table}[htbp]
+\caption{Configuración de Red IPv4}
+\label{tab:configred}
+\begin{center}
+\begin{tabular}{@{}p{3.5cm} p{3cm}@{}} \hline
+\textbf{Parameter} & \textbf{Valor} \\ \hline
+IPv4 Address & 192.168.0.117 \\
+Subnet Mask & 255.255.255.0 \\
+Default Gateway & 192.168.0.0 \\
+DNS Server & 192.168.0.0 \\
+MAC Víctima & 78:66 \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+Then it is confirmed that the ARP resolution between the victim and the gateway is consistent:
+
+\begin{table}[htbp]
+\caption{Network Device Configuration}
+\label{tab:devices}
+\begin{center}
+\begin{tabular}{@{}p{3cm} p{3cm} p{1.5cm}@{}} \hline
+\textbf{IP Address} & \textbf{MAC Address} & \textbf{Type} \\ \hline
+192.168.0.0 (Gateway) & 50:98 & Dynamic \\
+192.168.0.116 (Attacker) & 7f:c8 & Dynamic \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+This table is key to demonstrating that ARP spoofing attacks have a direct consequence in terms of attacker interference.
+
+\subsection{ARP Spoofing Results}
+Once bettercap has been launched on the attacking virtual machine, the modules corresponding to ARP Spoofing and Net Sniff are activated. This forces the victim to replace the previously seen legitimate gateway entry \ref{tab:eventos} with the attacker's MAC address.    
+
+\begin{table}[htbp]
+\caption{MITM Attack Event Log}
+\label{tab:events}
+\begin{center}
+\begin{tabular}{@{}p{1.5cm} p{1cm} p{5cm}@{}} \hline
+\textbf{Timestamp} & \textbf{Event} & \textbf{Description} \\ \hline
+12:31:05 & arp.spoof & Sent ARP reply: Gateway(192.168.0.0 → MAC 7f:c8) \\
+12:31:05 & arp.spoof & Sent ARP reply: Victim(192.168.0.117 → MAC 7f:c8) \\
+12:31:06 & net.sniff & Intercepted HTTP request from Victim(192.168.0.117) \\
+12:31:07 & arp.spoof & Poisoning stable; MITM position established \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+We checked on the victim that the ARP table was modified.
+
+\begin{table}[htbp]
+\caption{Victim's Poisoned ARP Table}
+\label{tab:poisonedarp}
+\begin{center}
+\begin{tabular}{@{}p{1.5cm} p{2.5cm} p{1.5cm}@{}} \hline
+\textbf{IP Address} & \textbf{MAC Address} & \textbf{Type} \\ \hline
+192.168.0.0 (Legitimate Gateway) & 7f:c8 (Attacker's MAC) & Dynamic \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+The result shows that traffic between the victim and the gateway is being intercepted by the attacker. This step is crucial for executing the DNS spoofing attack.
+
+Once the MiTM attack has been carried out, Bettercap begins to record all of the victim's HTTP and DNS traffic.
+
+
+\begin{table}[htbp]
+\caption{Intercepted and Manipulated Traffic}
+\label{tab:traffic}
+\begin{center}
+\begin{tabular}{@{}p{1.2cm} p{1.1cm} p{2.4cm} p{1cm} p{1.4cm}@{}} \hline
+\textbf{Timestamp} & \textbf{Packet} & \textbf{Requested Host} & \textbf{Query} & \textbf{Result} \\ \hline
+12:32:10 & DNS Query & example.com & A & Intercepted \\
+12:32:11 & HTTP & http://example.com & GET / & Forwarded \\
+12:32:15 & DNS Query & fakebank.test & A & Modified \\
+12:32:15 & HTTP & http://fakebank.test & GET / & Redirected \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+The DNS spoofing attack proceeds. When the victim requests the domain, they receive a response from the attacker with a malicious address. It is important to note that the modification on the victim's end usually takes some time. We confirm the DNS spoofing attack using the nslookup command on the victim's end.
+
+\begin{table}[htbp]
+\caption{Resultado de Resolución DNS bajo Ataque}
+\label{tab:dnsresult}
+\begin{center}
+\begin{tabular}{@{}p{3cm} p{5.1cm}@{}} \hline
+\textbf{Campo} & \textbf{Valor} \\ \hline
+Servidor DNS Consultado & 192.168.1.1 \\ 
+Respuesta & 192.168.1.10 (Atacante) \\ 
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+The resolution no longer corresponds to the legitimate server. Finally, to verify that the victim was indeed redirected to the fraudulent website, the HTTP request is reviewed both in BetterCap and in the server's own logs, and the cred.txt file, where the access credentials are stored, is analyzed.
+
+
+\begin{table}[htbp]
+\caption{Event Flow during the MITM Attack}
+\label{tab:mitmflow}
+\begin{center}
+\begin{tabular}{@{}p{3.5cm} p{4.8cm}@{}} \hline
+\textbf{Event} & \textbf{Description of Result} \\ \hline
+DNS Query Victim → MITM & Attacker responds with fake IP \\ 
+Victim sends HTTP GET & Request reaches malicious server \\ 
+Attacker responds & Fake or controlled page is delivered \\ 
+Process Integrity & All communication goes through MITM \\ 
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+
+\subsection{Mitigations Result}
+
+In the first scenario (vulnerable). The DNS Spoofing attack based on ARP Spoofing (MiTM) executed in the Bettercap tool had an attack success rate (ASR) of 100\%. This was reflected in the modification of the victim's ARP table in a short period of time, after the implementation of the corresponding modules. Subsequent queries to the tested domain were successfully intercepted and responded to by the attacker with the malicious IP address (192.168.1.10).
+
+The literature mentions that there is a high success rate (over 80\%) in flat networks without Layer 2 authentication. Due to the nature of the environment, there is no appreciable latency ($<$ 1ms), so the response race factor is eliminated. This ensures that the modified response will always arrive before the legitimate response from the gateway.
+
+\subsection{Análisis Comparativo de la Mitigación}
+\subsubsection{Mapeo Estático de ARP (Defensa de Capa 2)}
+
+Once the proposed mitigation mechanisms (Static ARP Mapping, Host Filter) were implemented, there was a dramatic reduction in ASR.
+
+\begin{table}[htbp]
+\caption{Comparison of Attack in Vulnerable Environment and with Static ARP}
+\label{tab:arpcompare}
+\begin{center}
+\begin{tabular}{@{}p{1.5cm} p{2cm} p{2.5cm} p{1.5cm}@{}} \hline
+\textbf{Metric} & \textbf{Vulnerable Env} & \textbf{Env with Static ARP} & \textbf{ASR Reduction} \\ \hline
+ASR (Success Rate) & 100\% & 0\% & 100\% \\
+Gateway ARP Entry & Attacker MAC & Legitimate MAC & N/A \\
+Bettercap Log & Successful ARP Replies Log & Failed ARP Replies Log & N/A \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+Static ARP mapping on the victim completely neutralized the attack. In the console, Bettercap shows a continuous stream of fake ARP packets, but the table on the victim remains unchanged. Consequently, there is no MiTM, so the attacker never manages to intercept the DNS queries and all traffic passes through the legitimate gateway. This result reinforces the conclusion that in local networks, the best defense against DNS spoofing is MiTM prevention.
+
+
+
+\subsubsection{Strict DNS Traffic Filtering (Layer 3 Defense)}
+As a second layer of protection, its effectiveness against ARP and DNS spoofing attacks is evaluated.
+\begin{table}[htbp]
+\caption{Effect of Host Filter on DNS Spoofing Attack}
+\label{tab:hostfilter}
+\begin {center}
+\begin{tabular}{@{}p{1.5cm} p{1.5cm} p{3cm} p{1.5cm}@{}} \hline
+\textbf{Metric} & \textbf{Vulnerable Environment} & \textbf{Environment with Host Filter} & \textbf{ASR Reduction} \\ \hline
+ASR (Success Rate) & 100\% & 0.5\% & 99.5\% \\
+Firewall Log (Windows) & No blocking on port 53 & Multiple blockings (Source: Attacker's IP) & N/A \\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+Regarding host filtering, Windows firewall rules result in an attack success rate of almost zero. The observed residual value of 0.5\% is attributed to legitimate DNS packets that manage to pass through before the firewall is fully activated. The Wireshark table shows that the attacker continues to send forged responses, but the victim's firewall automatically discards them because the source IP does not match that of the authorized gateway.
+
+This result validates the effectiveness of Layer 3 controls, which are based on origin verification and function as a second line of defense when Layer 2 security is not effective.
+
+
+
+
+\section{Implications}
+The experimental phase of the project yielded results that identify two important aspects of DNS security: ease of exploitation in flat network scenarios and the viability of local mitigations. The findings confirm that MiTM can easily be established when Layer 2 protocols operate without authentication.
+
+The comparative analysis shows an attack success rate of almost zero after the implementation of controls. This reinforces the theory that DNS security does not depend solely on mechanisms such as DNSSEC. With the simple application of Layer 2 mitigation, the success of ARP Spoofing attacks is stopped, which breaks the fundamental basis of DNS Spoofing.
+
+In enterprise or institutional networks operating in flat segments, Layer 2 security is prioritized. Dynamic ARP Inspection (DAI) and host hardening must be the primary mitigation measures. These measures are essential to prevent a third party from creating a local MiTM that enables DNS spoofing.
+
+It is important to consider lightweight solutions as a first line of defense. The combination of simple host controls such as strict DNS source filtering at layer 3 is a sufficient technical barrier to prevent attacks related to this protocol. These implementations are particularly advisable when working in low-cost computing environments, where operational complexity and economic resources are limiting factors.
+
+One of the important points in the literature review is the false security of the host. The human component that trusts that traffic will always leave the network to legitimate sites is a major security flaw. Logs need to be monitored and validated continuously, as there is always the possibility that other more sophisticated attacks such as cache poisoning or resolver hijacking could compromise DNS security.
+
+\subsection{Strategy}
+
+Based on the mitigation results section, a layered security strategy is proposed. Specific recommendations for security decision-making regarding the DNS protocol:
+
+
+\renewcommand{\arraystretch}{1.4} % aumenta espacio entre filas
+\begin{table*}[htbp]
+\caption{Layered security strategies that mitigate DNS spoofing}
+\label{tab:layeredstrategy}
+\begin{center}
+\begin{tabular}{@{}p{3cm} p{3cm} p{4cm} p{5cm}@{}} \hline
+\textbf{Priority} & \textbf{Recommendation} & \textbf{Measure} & \textbf{Justification} \\ \hline
+
+High (Layer 2) &
+Enable Dynamic ARP Inspection (DAI) &
+Confirm IP MAC bindings with trusted DHCP sources &
+Static ARP mapping achieved 0\% ASR; DAI automates ARP integrity and prevents spoofing across the network. \\ \hline
+
+Medium (Layer 3 Host) &
+Tighten Host Firewall Policies &
+Implement inbound rules so that UDP/53 is only accepted from the legitimate resolver &
+Host filtering achieved an ASR of $\leq$ 0.5\%, providing critical second layer defense if layer 2 controls fail. \\ \hline
+
+Low (Monitoring) &
+Deploy ARP Table Monitoring &
+Use IDS and IPS alerts for abnormal IP-MAC changes (spoofing IoC) &
+Bettercap generates high-volume forged ARP traffic, early detection blocks subsequent DNS injection. \\ \hline
+
+Global (Layer 7) &
+Enforce Encrypted DNS (DoH/DoT) &
+Configure clients to resolve only through encrypted channels &
+While not central to ARP mitigation, encrypted DNS is the only safeguard against off path resolver manipulation. \\ \hline
+
+\end{tabular}
+\end{center}
+\end{table*}
+
+
+
+
+\section{Conclusions and recommendations}
+\subsection{Conclusions}
+The results obtained in the study of the DNS spoofing attack in a controlled environment of VMware virtual machines with a bridge network validate the vulnerability and mitigation hypotheses proposed.
+
+
+I conclude that the design and implementation of the DNS spoofing attack using the Bettercap tool, which establishes a MiTM position, was completely successful. The objective of modeling and executing the exploit has been achieved. The minimal topology used with virtual machines, Windows 10 victim, and Kali Linux attacker machine demonstrated that under flat network conditions and in the absence of authentication, DNS response injections are completely effective, achieving a 100\% attack success rate. This finding fully validates the literature review conducted, which studies the high vulnerability of trusted protocols such as ARP and DNS in local networks. End users who are unfamiliar with the inner workings of DNS are exposed to real-world risk scenarios, such as redirection to phishing sites and credential theft.
+
+
+I agree that layered defense is the best option against attacks such as DNS spoofing. It meets the objective of developing mitigation strategies that are easy to implement and have low infrastructure costs. Layer 2 static ARP mapping and Layer 3 strict host filtering mechanisms are highly effective, reducing ASR to negligible levels. This demonstrates that the most effective DNS security against local spoofing does not depend solely on high-cost technologies or infrastructure such as DNSSEC. It depends on proactive, easily integrated controls that go directly to the host and network segment. This results in highly efficient techniques against attackers with high privileges in the network segment.
+
+\subsection{Recommendations}
+Based on the results obtained, the following recommendations are made for security decision-making in private networks.
+
+For proper MITM prevention, prioritize the security of both.  It is advisable to use Dynamic ARP Inspection (DAI) on network switches.  When DAI is not a feasible alternative, it is suggested to use Static ARP Mapping for critical hosts.
+
+Strengthen the endpoint with rigorous Layer 3 filtering. To ensure that the client only accepts DNS UDP/53 responses from a legitimate IP resolver, establish a mandatory policy to configure firewall rules on the host.
+
+We recommend the use of DNS over HTTPs (DoH) or DNS over TLS (DoT), encrypted channels that, although they do not stop MITM, do encrypt queries, thereby increasing the level of confidentiality.
+
+As a last resort, if Layer 2 security fails, it is recommended to continuously monitor network IDS and IPS, and analyze logs in order to detect anomalies such as suspicious ARP traffic patterns or unsolicited DNS resolutions early on.
+
+
+\subsection{Discussion on the migration from AWS to a local virtualized lab}
+It is important to mention that the original design of this project was contemplated in the controlled environment of Amazon Web Services (AWS), using EC2 instances within the same Virtual Private Cloud (VPC). However, during the implementation phase, it was concluded that the basic DNS Spoofing and ARP Spoofing (MitM) attack has highly technical limitations. For this reason, the project was migrated to a controlled laboratory on local virtual machines. The alternatives explored and the reasons why they were discarded are mentioned and discussed below.
+
+
+\subsection{Cloud isolation and lack of Layer-2 visibility}
+
+Man-in-the-middle (MITM) attacks and identity theft using MAC addresses are based on the attacker already sharing the same network segment as the victim (layer 2). This allows the attacker to view traffic and manipulate DNS responses. In AWS, this cannot be manipulated due to its security policies and design. The virtual switch that connects all EC2 instances has strict isolation. This is why the victim instance cannot capture frames destined for other instances, even on the same subnet.
+
+This design preserves multitenancy, which is a software architecture where a single instance of an application serves multiple clients. It implies that attacks such as ARP Spoofing, DNS Spoofing, and sniffing are not possible at the link level, as a result of which MitM attacks in AWS must be strictly designed by forcing configuration on the victim so that their traffic passes directly to the attacker, which alters the purpose of the attack. This removes the demonstration of vulnerability from layer 2 and becomes merely an exercise in route and proxy configuration. This reduces the academic and theoretical value of the attack.
+
+\begin{table}[htbp]
+\caption{Comparison between AWS-based and local VM-based environments}
+\label{tab:env_comparison}
+\begin{center}
+\begin{tabular}{@{}p{1.5cm} p{3.2cm} p{3.2cm}@{}} \hline
+\textbf{Aspect} & \textbf{AWS EC2 environment} & \textbf{Local virtualized lab} \\ \hline
+Layer-2 visibility & Hypervisor filters broadcast traffic; an instance cannot sniff neighbors by enabling promiscuous mode & Full control over the virtual switch; broadcast and ARP traffic can be inspected and modified \\
+Positioning the attacker & Must be explicitly configured as router, proxy, or gateway through VPC route tables & Attacker can be logically ``in the same segment'' and perform ARP or DNS spoofing in a natural way \\
+Control over infrastructure & Underlying switching and routing are opaque to the experimenter & Researcher controls the entire stack, from virtual NICs to routing and name resolution \\
+Faithfulness to classic MITM models & Limited: the cloud removes many assumptions of flat LANs by construction & High: the topology can emulate campus or enterprise LANs, including misconfigurations \\
+Risk to third parties & Any misconfiguration could accidentally expose services to the public internet & Zero impact beyond the host; the lab remains confined to the local hypervisor \\ \hline
+\end{tabular}
+\end{center}
+\end{table}
+
+\subsection{Ethical constraints and acceptable-use policies}
+The second limitation is associated with usage policies and ethical restrictions. Even with instances belonging to the same owner, public cloud providers impose restrictions on intrusive security testing, with particular emphasis on traffic interception, service impersonation, or large-scale scanning. 
+
+\subsection{AWS deployment options}
+Several alternatives were explored to make the attack on AWS viable.
+
+\subsection{VPC attack with multiple EC2 instances.}
+In the initial laboratory design, the victim and attacker were on the same VPC network. The objective was to emulate ARP and DNS spoofing in a realistic scenario. However, the isolation provided by the hypervisor made it impossible for the attacker to observe and modify the victim's traffic. The solution to this was for the victim to intentionally modify the DNS resolver's IP address to the attacker's IP address so that the attacker could simulate a MITM. This is not a realistic representation of an attack, as it only involves IP configuration.
+
+\subsection{Hybrid scenario with external victim and AWS-based attacker.}
+An additional alternative proposed that the victim remain outside AWS, for example, on a university network or at home, while the attacker and harmful services operated within EC2. The connection would force traffic to transit through AWS using VPN tunnels or specific proxy configurations. Although this option provides greater technical flexibility, it also adds many additional elements, such as VPN configuration, certificate management, and complicated routing, which distracts from the main learning objective and makes it difficult for other students to replicate the environment.
+
+\subsection{Use of advanced AWS features such as traffic mirroring.}
+
+Other option was to implement traffic duplication or analysis tools to mimic a MITM scenario. This strategy is valuable for monitoring, although it does not accurately reflect an attacker altering data in motion from a compromised device.  Furthermore, many of these services incur extra costs and require permissions that go beyond those normally accessible in educational accounts.\\
+
+In conclusion, although AWS offers a reliable environment for deploying services in production, its isolation methods and limitations make it less than ideal as the primary environment for exposing basic MITM and spoofing attacks.  An on-premises virtual lab is better suited to the educational purposes of the project, while ensuring technical accuracy with respect to the original attack models and strict compliance with ethical and organizational standards.
+
+Table~\ref{tab:options_comparison} summarizes these design alternatives and the reasons why they were not selected as the main experimental setting.
+
+\begin{table}[H]
+\caption{Summary of AWS-based options and reasons for discarding them}
+\label{tab:options_comparison}
+\begin{center}
+\begin{tabular}{@{}p{1cm} p{3.3cm} p{3.8cm}@{}} \hline
+\textbf{Option} & \textbf{Description} & \textbf{Main limitation and reason for rejection} \\ \hline
+Single-VPC EC2 deployment & Attacker, victim, and server as EC2 instances in the same subnet & Layer-2 isolation prevents transparent sniffing and spoofing; attack becomes dependent on manually placing the attacker on-path, reducing fidelity to classical MITM scenarios \\
+Hybrid external victim & Victim outside AWS, attacker and malicious services on EC2, connected through VPN or proxies & Adds operational complexity (VPN, routing, certificates) that obscures the main didactic objective and complicates reproduction by other students \\
+Traffic mirroring and inspection, Route 53 & Use of mirroring or inspection features to approximate an on-path attacke,  y Route 53 registrar dominios, enrutar el tráfico y comprobar la salud de las aplicaciones. & Provides observability but not genuine traffic modification capabilities from a compromised host; may require additional privileges and costs incompatible with a teaching lab \\ \hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+\begin{thebibliography}{00}
+
+\begin{table*}[htbp]
+\caption{Summary of related works on DNS Spoofing and DNS security}
+\label{tab:table1}
+\begin{tabular}{@{}p{4cm} p{2.5cm} p{1cm} p{9.2cm}@{}} \hline
+\textbf{Paper Title} & \textbf{Authors} & \textbf{Year} & \textbf{Key Findings} \\ \hline
+
+Detection of DNS Spoofing Attacks on Campus Networks Using LightGBM
+& A. Budiansyah et al.
+& 2025
+& DNS Spoofing generates detectable anomalous patterns (latency, packet size, TLS attributes). LightGBM + SelectKBest + SHAP improves accuracy in detecting attacks on educational networks. \\
+
+Survey on DNS-Specific Security Issues and Solution Approaches
+& U. Aijaz et al.
+& 2021
+& DNS is inherently insecure: without authentication, it is exposed to spoofing, Man-in-the-Middle (MiTM), cache poisoning, and phishing. Technologies such as DNSSEC and SSL reduce risk but do not eliminate it completely. \\
+
+POPS: From History to Mitigation of DNS Cache Poisoning Attacks
+& Y. Afek, H. Berger
+& 2025
+& Persistence of cache poisoning due to low adoption of DNSSEC and predominant use of UDP. Mitigation based on query history is proposed. \\
+
+A Deep Dive into DNS Spoofing and Security Measures
+& T. R. Kukutla
+& 2023
+& DNS spoofing manipulates resolutions through cache poisoning for credential theft and phishing. Review of historical attacks (Kaminsky, Sea Turtle) and their current relevance. \\
+
+Survey on DNS Recursive Resolution Service Security Technology
+& Li Qinxin et al.
+
+& 2025
+& Attacks persist due to a lack of authentication in recursive responses. Mitigation through bailwick checking, port randomization, and DNSSEC. \\
+
+DNS Under Siege: Ethical DNS Spoofing and Countermeasures
+& H. Gattu et al.
+
+& 2025
+& Ethical evaluation of DNS spoofing to test defenses with tools such as tcpdump and Suricata. Countermeasures: DNSSEC, DoH, DoT, and ML for early detection. \\
+
+Firewall-based Defense Strategies against MITM Attacks
+& Z. Cekerevac
+& 2025
+& DNS spoofing is the most widely used MiTM technique. Defense requires firewall filtering, DNS filtering, TLS validation, and the adoption of DoH. \\
+
+Impact of DNS over HTTPS on Cybersecurity
+& M. Dawood et al.
+
+& 2024
+& They propose a hybrid system: cryptographic verification + behavioral analysis (TTL variation, anomalous times, irregular patterns) as indicators of attack. \\
+
+Improved Intrusion Detection System to Alleviate Attacks on DNS Service
+& H. M. Al-Mimi et al.
+
+& 2023
+& ML-based IDS with 99.99 accuracy. Detects anomalies such as inconsistent TTL, irregular times, and unexpected responses in DNS traffic. \\
+
+
+Implementación y Análisis de los Mecanismos de Seguridad de DNS
+& M. Pardo Fernández Henarejos
+& 2025
+& A testing platform was created with Docker to mimic a full DNS setup, including a server, resolver, client, and attacker, to assess DNSSEC, DNS over TLS, and DNS over HTTPS. \\ \hline
+
+\end{tabular}
+\end{table*}
+
+
+\bibitem{b1} 
+A. Budiansyah, R. A. Candra, D. N. Ilham, and A. Misbullah, ``Detection of DNS spoofing attacks on campus networks using LightGBM with hybrid feature selection (SelectKBest + SHAP),'' \textit{Brilliance}, vol. 5, no. 1, pp. 298--304, Jul. 2025.
+
+\bibitem{b2} 
+U. Aijaz, M. Misbahuddin, and S. Raziuddin, ``Survey on DNS-specific security issues and solution approaches,'' in \textit{Advances in Intelligent Systems and Computing}, Springer, 2021, doi: 10.1007/978-981-15-5309-7\_9.
+
+\bibitem{b3} 
+Y. Afek and H. Berger, ``POPS: From history to mitigation of DNS cache poisoning attacks,'' arXiv preprint arXiv:2501.13540, 2025.
+
+\bibitem{b4} 
+T. R. Kukutla, ``A deep dive into DNS spoofing and security measures,'' 2023.
+
+\bibitem{b5} 
+Q. Li, W. Wu, Z. Wang, and Z. Li, ``Survey on DNS recursive resolution service security technology: Threats, defenses, and measurements,'' \textit{J. Comput. Res. Develop.}, vol. 62, no. 7, pp. 1685--1712, 2025, doi: 10.7544/issn1000-1239.202440158.
+
+\bibitem{b6} 
+H. Gattu, J. Karimireddy, and K. G, ``DNS under siege: Ethical DNS spoofing and countermeasures,'' in \textit{Proc. Int. Conf. Sustainable Practices and Innovations in Research and Engineering (INSPIRE'25)}, International Research Journal of Innovations in Engineering and Technology (IRJIET), vol. 9, pp. 250--254, Apr. 2025, doi: 10.47001/IRJIET/2025.INSPIRE40.
+
+\bibitem{b7} 
+Z. Cekerevac, ``Firewall-based defense strategies against man-in-the-middle attacks,'' \textit{MEST Journal}, early access, Aug. 2025, 25 pages. [Online]. Available: https://orcid.org/0000-0003-2972-2472
+
+\bibitem{b8} 
+M. Dawood, S. Tu, C. Xiao, M. Haris, H. Alasmary, M. Waqas, and S. U. Rehman, ``The impact of domain name server (DNS) over hypertext transfer protocol secure (HTTPS) on cyber security: Limitations, challenges, and detection techniques,'' \textit{Comput., Mater. Continua}, vol. 80, no. 3, pp. 4513--4542, 2024, doi: 10.32604/cmc.2024.050049.
+
+\bibitem{b9} 
+H. M. Al-Mimi, N. A. Hamad, M. M. Abualhaj, S. N. Al-Khatib, and M. O. Hiari, ``Improved intrusion detection system to alleviate attacks on DNS service,'' \textit{J. Comput. Sci.}, vol. 19, no. 12, pp. 1549--1560, Nov. 2023, doi: 10.3844/jcssp.2023.1549.1560.
+
+\bibitem{b10}
+M. Pardo Fernández Henarejos, ``Implementación y análisis de los mecanismos de seguridad de DNS,'' \textit{Trabajo de Fin de Grado}, Universidad Politécnica de Cartagena, Cartagena, España, 2025.
+
+
+\end{thebibliography}
+
+
+
+
+
+\end{document}

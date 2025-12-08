@@ -1,11 +1,25 @@
+# Utility Tools and Commands
+
+## 1. Cloudflared for Windows
+Download the latest release (AMD64):
 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
 
-Verificar que DoH realmente funcionas
+## 2. Verify DNS over HTTPS (DoH) Status
+Check if DoH is active and working correctly:
 https://1.1.1.1/help
 
+## 3. Network Commands (Windows)
+
+### Flush DNS Cache
+Clear the local DNS resolver cache:
 ipconfig /flushdns
 
+### Static ARP Management (Defense against ARP Spoofing)
 
+# Add Static ARP Entry
+# Usage: netsh interface ipv4 add neighbors "Interface Name" <Gateway IP> <Gateway MAC>
 netsh interface ipv4 add neighbors "Ethernet0" 192.168.220.2 00-50-56-f6-56-f6
 
+# Delete Static ARP Entry
+# Remove the static entry to restore dynamic ARP resolution:
 netsh interface ipv4 delete neighbors "Ethernet0" 192.168.220.2
